@@ -43,7 +43,10 @@ var APP = {
     if (isExist) return;
 
     APP.data.history.unshift(Array.from(arguments));
-    if (APP.data.history.length > 10) app.data.history.pop();
+    if (APP.data.history.length > 10) {
+      APP.data.history.pop();
+    }
+
     update_context();
     APP.save();
   },
