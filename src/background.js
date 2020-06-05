@@ -26,6 +26,9 @@ function badgeProgress(promise) {
 }
 
 var APP = {
+  getVersion() {
+    return chrome.app.getDetails().version;
+  },
   save: function() {
     chrome.storage.local.set(APP.data);
   },
@@ -70,7 +73,7 @@ var APP = {
     return APP.data.collections[name].join(',');
   },
   toId: function(photo) {
-    return 'photo' + photo.owner_id + "_" + photo.id;
+    return 'photo' + photo.owner_id + '_' + photo.id;
   },
   getMessage: function(message) {
     if (!APP.data.text) {
@@ -79,8 +82,8 @@ var APP = {
     return prompt(message || 'Введите текст');
   },
   confirmSend(collectionName, photo) {
-    APP.collectionPush(collectionName, photo);
-    return APP.data.collect && !confirm("В буфере " + index + " фото.\nОтправить фото?");
+    var index = APP.collectionPush(collectionName, photo);
+    return APP.data.collect && !confirm('В буфере ' + index + ' фото.\nОтправить фото?');
   },
   toDial: function(peer_id, img) {
     badgeProgress(getFile(img.srcUrl).then(function(blob) {
@@ -106,6 +109,7 @@ var APP = {
 
       return API('messages.send', {
         peer_id: peer_id,
+        random_id: 0,
         message: APP.getMessage('Введите текст сообщения'),
         attachment: APP.collectionGet(collectionName)
       }).then(function(res) {
@@ -136,7 +140,7 @@ var APP = {
 
       if (APP.confirmSend(collectionName, photo)) return res;
 
-      return API("wall.post", {
+      return API('wall.post', {
         owner_id: owner_id,
         message: APP.getMessage('Введите текст записи'),
         attachment: APP.collectionGet(collectionName)
@@ -172,41 +176,76 @@ var APP = {
 
 function execute() {
   var res = {};
-  res.dialogs = API.messages.getDialogs({ count: 20 }).items.map.message;
-  res.users = API.users.get({
-    user_ids: res.dialogs.map.user_id,
-    name_case: "dat"
+  var conversations = API.messages.getConversations({
+    count: 40,
+    extended: 1,
+    fields: "first_name_dat,last_name_dat"
   });
 
-  var ids = res.dialogs.map.user_id;
-  var ids_length = ids.length + 1;
-  var group_ids = [];
+  res.dialogs = conversations.items.map.conversation;
+  res.users = conversations.profiles;
+  res.groups = conversations.groups;
 
-  while(ids_length = ids_length - 1) {
-    group_ids.push(-ids[ids_length - 1]);
-  }
-
-  res.groups = API.groups.getById({ group_ids: group_ids });
-  res.albums = API.photos.getAlbums({ count: 20 });
-  res.admin_groups = API.groups.get({ extended: 1, filter: "admin" });
-  res.friends = API.friends.get({ count:20, name_case: "dat", fields: "last_name", order: "hints" });
+  res.albums = API.photos.getAlbums({ count: 20 }).items;
+  res.admin_groups = API.groups.get({ extended: 1, filter: "admin" }).items;
+  res.friends = API.friends.get({ count:20, fields: "last_name,last_name_dat,first_name_dat", order: "hints" }).items;
   res.user = API.users.get()[0];
 
   return res;
 }
 
+function createContextMenu(items) {
+  // clear old menu
+  chrome.contextMenus.removeAll();
+
+  items.forEach(function(item) {
+    var items_action = item.items_action;
+    var items = item.items;
+
+    delete item.items_action;
+    delete item.items;
+
+    var contextMenuItem = chrome.contextMenus.create(Object.assign({
+      enabled: !items || items.length > 0,
+      contexts: ['image'],
+    }, item));
+
+    if (items && items.length) {
+      if (items_action) {
+        items = [items_action].concat(items);
+      }
+
+      items.forEach(function attachMenu(item) {
+        chrome.contextMenus.create(Object.assign({
+          parentId: contextMenuItem,
+          contexts: ['image'],
+        }, item));
+      });
+    }
+  })
+}
+
 function update_context() {
-  return API("execute", {
+  return API('execute', {
     code: execute.toString()
       .replace(/.+?{([^]+)}/g, "$1")
       .replace(/\.map/g, '@')
   }).then(function(res) { // Диалоги
     var data = res.response;
-    var names = {};
+
+    // add default data
+    data.users = data.users || [];
+    data.groups = data.groups || [];
+    data.dialogs = data.dialogs || [];
+    data.friends = data.friends || [];
+    data.albums = data.albums || [];
+    data.admin_groups = data.admin_groups || [];
 
     // fill names
+    var names = {};
+
     names = data.users.reduce(function(prev, user) {
-      prev[user.id] = user.first_name + ' ' + user.last_name;
+      prev[user.id] = user.first_name_dat + ' ' + user.last_name_dat;
       return prev;
     }, names);
 
@@ -215,173 +254,151 @@ function update_context() {
       return prev;
     }, names);
 
-    // clear old menu
-    chrome.contextMenus.removeAll();
 
-    // fill user info
-    chrome.contextMenus.create({
-      "title": data.user.first_name + " " + data.user.last_name,
-      "contexts": ['image'],
-      onclick: function() {
-        open("https://vk.com/id" + user.id);
-      }
-    });
-
-
-    // fill history
-    if (APP.data.history.length) {
-      var history = chrome.contextMenus.create({
-        "title": 'История',
-        "contexts": ['image']
-      });
-
-      chrome.contextMenus.create({
-        parentId: history,
-        title: 'Очистить историю',
-        contexts: ['image'],
-        onclick: function() {
-          chrome.storage.local.clear();
-          update_context();
+    createContextMenu([
+      {
+        title: data.user.first_name + ' ' + data.user.last_name,
+        onclick: function onClick() {
+          open('https://vk.com/id' + data.user.id);
         }
-      });
-
-      APP.data.history.map(function(item) {
-        var title = item[0];
-        var method = item[1];
-        var data = item[2];
-
-        return chrome.contextMenus.create({
-          parentId: history,
-          title: title,
+      },
+      {
+        title: 'История',
+        items_action: {
+          title: 'Очистить историю',
           contexts: ['image'],
-          onclick: APP[method].bind(this, data)
-        });
-      });
-    }
+          onclick: function() {
+            chrome.storage.local.clear();
+            update_context();
+          }
+        },
+        items: APP.data.history.map(function createHistoryItem(item) {
+          var title = item[0];
+          var method = item[1];
+          var data = item[2];
 
+          return {
+            title: title,
+            onclick: APP[method].bind(this, data)
+          };
+        })
+      },
+      {
+        title: 'В диалог',
+        items: data.dialogs.map(function createDialogItem(dial) {
+          dial.peer_id = dial.peer.id;
+          dial.name = (dial.peer_id > 2e9 ? dial.chat_settings.title : names[dial.peer_id]) || dial.peer_id.toString();
 
-    // fill dials
-    var dials = chrome.contextMenus.create({
-      "title": "В диалог",
-      "contexts": ["image"]
-    });
-
-    data.dialogs.map(function(dial) {
-      dial.peer_id = dial.chat_id ? dial.chat_id + 2e9 : dial.user_id;
-      dial.name = dial.chat_id ? dial.title : names[dial.user_id] || dial.user_id.toString();
-
-      chrome.contextMenus.create({
-        parentId: dials,
-        title: dial.name,
-        contexts: ["image"],
-        onclick: function(img) {
-          APP.toHistory("В диалог " + dial.name, "toDial", dial.peer_id);
-          APP.toDial(dial.peer_id, img);
+          return {
+            title: dial.name,
+            onclick: function onClick(img) {
+              APP.toHistory('В диалог ' + dial.name, 'toDial', dial.peer_id);
+              APP.toDial(dial.peer_id, img);
+            }
+          };
+        })
+      },
+      {
+        title: 'В альбом',
+        items: data.albums.map(function createAlbumItem(item) {
+          return {
+            title: item.title,
+            onclick: function onClick(img) {
+              APP.toHistory('В альбом ' + item.title, 'toAlbum', item.id);
+              APP.toAlbum(item.id, img);
+            }
+          };
+        })
+      },
+      {
+        title: 'Другу в сообщения',
+        items: data.friends.map(function createFriendItem(item) {
+          item.name = item.first_name_dat + ' ' + item.last_name_dat;
+          return {
+            title: item.name,
+            onclick: function onClick(img) {
+              APP.toHistory('В диалог ' + item.name, 'toDial', item.id);
+              APP.toDial(item.id, img);
+            }
+          };
+        })
+      },
+      {
+        title: 'На стену',
+        items_action: {
+          title: 'Свою',
+          onclick: function(img) {
+            APP.toHistory('На свою стену', 'toWall', data.user.id);
+            APP.toWall(data.user.id, img);
+          }
+        },
+        items: data.admin_groups.map(function createWallItem(item) {
+          return {
+            title: item.name,
+            onclick: function(img) {
+              APP.toHistory('На стену ' + item.name, 'toWall', -item.id);
+              APP.toWall(-item.id, img);
+            }
+          };
+        })
+      },
+      {
+        title: 'Запрашивать текст',
+        type: 'checkbox',
+        checked: APP.data.text,
+        onclick: APP.onCheck.bind(this, 'text')
+      },
+      {
+        title: 'Запрашивать отправку (Режим сбора)',
+        type: 'checkbox',
+        checked: APP.data.collect,
+        onclick: APP.onCheck.bind(this, 'collect')
+      },
+      {
+        title: 'Обновить меню',
+        contexts: ['image'],
+        onclick: update_context
+      },
+      {
+        title: 'Версия: ' + APP.getVersion(),
+        enabled: false,
+      },
+      {
+        title: 'С любовью и багами, @FlyInk <3',
+        onclick: function onClick() {
+          open('https://vk.com/flyink');
         }
-      });
-    });
-
-
-    // fill albums
-    var albums = chrome.contextMenus.create({
-      "title": "В альбом",
-      "contexts": ["image"]
-    });
-    data.albums.items.map(function(item) {
-      return chrome.contextMenus.create({
-        "title": item.title,
-        "parentId": albums,
-        "contexts": ["image"],
-        "onclick": function(img) {
-          APP.toHistory("В альбом " + item.title, "toAlbum", item.id);
-          APP.toAlbum(item.id, img);
-        }
-      });
-    });
-
-
-    // fill friend dials
-    var friends = chrome.contextMenus.create({
-      "title": "Другу в сообщения",
-      "contexts": ["image"]
-    });
-    data.friends.items.map(function(item) {
-      return chrome.contextMenus.create({
-        "title": item.first_name + " " + item.last_name,
-        "parentId": friends,
-        "contexts": ["image"],
-        "onclick": function(img) {
-          APP.toHistory("В диалог " + item.first_name + " " + item.last_name, "toDial", item.id);
-          APP.toDial(item.id, img);
-        }
-      });
-    });
-
-
-    // fill wall
-    var walls = chrome.contextMenus.create({
-      "title": "На стену",
-      "contexts": ["image"]
-    });
-    chrome.contextMenus.create({
-      "title": "Свою",
-      "parentId": walls,
-      "contexts": ["image"],
-      "onclick": function(img) {
-        APP.toHistory("На свою стену", "toWall", data.user.id);
-        APP.toWall(data.user.id, img);
       }
-    });
-    data.admin_groups.items.map(function(item) {
-      return chrome.contextMenus.create({
-        "title": item.name,
-        "parentId": walls,
-        "contexts": ["image"],
-        "onclick": function(img) {
-          APP.toHistory("На стену " + item.name, "toWall", -item.id);
-          APP.toWall(-item.id, img);
-        }
-      });
-    });
-
-    // fill  options
-    chrome.contextMenus.create({
-      "type": "checkbox",
-      "title": "Запрашивать текст",
-      "contexts": ["image"],
-      "checked": APP.data.text,
-      "onclick": APP.onCheck.bind(this, "text")
-    });
-    chrome.contextMenus.create({
-      "type": "checkbox",
-      "title": "Запрашивать отправку (Режим сбора)",
-      "checked": APP.data.collect,
-      "contexts": ["image"],
-      "onclick": APP.onCheck.bind(this, "collect")
-    });
-    chrome.contextMenus.create({
-      "title": "Обновить меню",
-      "contexts": ["image"],
-      "onclick": update_context
-    });
+    ]);
   }).catch(function(e) {
     console.error(e);
-    chrome.contextMenus.create({
-      "title": "Обновить меню",
-      "contexts": ["image"],
-      "onclick": update_context
-    });
-    chrome.contextMenus.create({
-      "title": "Ошибка :C",
-      "contexts": ["image"]
-    });
+    createContextMenu([
+      {
+        title: 'Ошибка загрузки :C',
+        enabled: false,
+      },
+      {
+        title: 'Обновить меню',
+        onclick: update_context
+      },
+      {
+        title: 'Версия: ' + APP.getVersion(),
+        enabled: false,
+      },
+      {
+        title: 'С любовью и багами, @FlyInk <3',
+        onclick: function onClick() {
+          open('https://vk.com/flyink');
+        }
+      }
+    ]);
   });
 }
 
 update_context();
-setBadge("");
+setBadge('');
 
 chrome.storage.local.get(function(data) {
   Object.assign(APP.data, data);
-  console.log("settings restored", data);
+  console.log('settings restored', data);
 });

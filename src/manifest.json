@@ -4,16 +4,16 @@
 	"name": "Отправить фото ВКонтакте",
 	"permissions": ["storage","contextMenus","*://*/*"],
 	"description": "Отправляй и сохраняй картинки с любых сайтов сразу в ВКонтакте",
-	"version": "2.1",
+	"version": "2.2",
 	"incognito": "split",
 	"icons": {
 		"48": "icon/48.png",
-		"48": "icon/128.png"
+		"128": "icon/128.png"
 	},
 	"browser_action": {
 		"default_icon": {
 			"48": "icon/48.png",
-			"48": "icon/128.png"
+			"128": "icon/128.png"
 		}
 	},
 	"background":{

@@ -24,7 +24,7 @@
       _data.append('hash', hash);
       _data.append('method', 'execute');
       _data.append('param_code', isExecute ? data.code : 'return API.' + method + '(' + JSON.stringify(data) + ');');
-      _data.append('param_v', '5.60');
+      _data.append('param_v', '5.103');
 
       if (isExecute) {
         Object.keys(data).forEach(function addData(name) {
