@@ -268,7 +268,8 @@ function update_context() {
           title: 'Очистить историю',
           contexts: ['image'],
           onclick: function() {
-            chrome.storage.local.clear();
+            APP.data.history = [];
+            APP.save();
             update_context();
           }
         },
@@ -358,6 +359,18 @@ function update_context() {
         title: 'Обновить меню',
         contexts: ['image'],
         onclick: update_context
+      },
+      {
+        enabled: !!document.elementsFromPoint,
+        contexts: ['page', 'frame', 'link'],
+        title: 'Найти здесь изображение',
+        onclick: function onClick(event, tab) {
+          chrome.tabs.sendMessage(tab.id, "searchImages", function(response) {
+            if (response.responseText) {
+              alert(response.responseText);
+            }
+          });
+        }
       },
       {
         title: 'Версия: ' + APP.getVersion(),
